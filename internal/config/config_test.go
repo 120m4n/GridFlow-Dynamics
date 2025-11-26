@@ -16,15 +16,25 @@ func TestLoad(t *testing.T) {
 	if cfg.Server.Port != "8080" {
 		t.Errorf("Expected default server port 8080, got %s", cfg.Server.Port)
 	}
+
+	if cfg.API.HMACSecret != "default-secret-change-in-production" {
+		t.Errorf("Expected default HMAC secret, got %s", cfg.API.HMACSecret)
+	}
+
+	if cfg.API.RateLimitPerMin != 100 {
+		t.Errorf("Expected default rate limit 100, got %d", cfg.API.RateLimitPerMin)
+	}
 }
 
 func TestLoadWithEnvVars(t *testing.T) {
 	// Set environment variables
 	os.Setenv("RABBITMQ_URL", "amqp://test:test@rabbitmq:5672/")
 	os.Setenv("SERVER_PORT", "9090")
+	os.Setenv("HMAC_SECRET", "custom-secret")
 	defer func() {
 		os.Unsetenv("RABBITMQ_URL")
 		os.Unsetenv("SERVER_PORT")
+		os.Unsetenv("HMAC_SECRET")
 	}()
 
 	cfg := Load()
@@ -35,6 +45,10 @@ func TestLoadWithEnvVars(t *testing.T) {
 
 	if cfg.Server.Port != "9090" {
 		t.Errorf("Expected custom server port 9090, got %s", cfg.Server.Port)
+	}
+
+	if cfg.API.HMACSecret != "custom-secret" {
+		t.Errorf("Expected custom HMAC secret, got %s", cfg.API.HMACSecret)
 	}
 }
 

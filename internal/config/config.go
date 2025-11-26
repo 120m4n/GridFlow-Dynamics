@@ -9,6 +9,7 @@ import (
 type Config struct {
 	RabbitMQ RabbitMQConfig
 	Server   ServerConfig
+	API      APIConfig
 }
 
 // RabbitMQConfig holds RabbitMQ connection settings.
@@ -21,6 +22,12 @@ type ServerConfig struct {
 	Port string
 }
 
+// APIConfig holds API settings.
+type APIConfig struct {
+	HMACSecret    string
+	RateLimitPerMin int
+}
+
 // Load reads configuration from environment variables with defaults.
 func Load() *Config {
 	return &Config{
@@ -29,6 +36,10 @@ func Load() *Config {
 		},
 		Server: ServerConfig{
 			Port: getEnv("SERVER_PORT", "8080"),
+		},
+		API: APIConfig{
+			HMACSecret:    getEnv("HMAC_SECRET", "default-secret-change-in-production"),
+			RateLimitPerMin: 100,
 		},
 	}
 }

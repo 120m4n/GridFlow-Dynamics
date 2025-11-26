@@ -14,9 +14,10 @@ import (
 
 // Exchange names for the event-driven architecture.
 const (
-	ExchangeCrewEvents  = "crew.events"
-	ExchangeTaskEvents  = "task.events"
-	ExchangeAlertEvents = "alert.events"
+	ExchangeCrewEvents     = "crew.events"
+	ExchangeTaskEvents     = "task.events"
+	ExchangeAlertEvents    = "alert.events"
+	ExchangeCrewLocations  = "crew.locations"
 )
 
 // Routing keys for events.
@@ -116,6 +117,7 @@ func SetupExchanges(ch *amqp.Channel) error {
 		ExchangeCrewEvents,
 		ExchangeTaskEvents,
 		ExchangeAlertEvents,
+		ExchangeCrewLocations,
 	}
 
 	for _, exchange := range exchanges {

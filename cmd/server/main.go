@@ -3,11 +3,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/120m4n/GridFlow-Dynamics/internal/api/handlers"
+	"github.com/120m4n/GridFlow-Dynamics/internal/api/middleware"
 	"github.com/120m4n/GridFlow-Dynamics/internal/config"
 	"github.com/120m4n/GridFlow-Dynamics/internal/messaging"
 	"github.com/120m4n/GridFlow-Dynamics/internal/services/alert"
@@ -35,6 +40,17 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Create publisher for API handlers
+	var publisher *messaging.Publisher
+	if conn.IsConnected() {
+		var err error
+		publisher, err = messaging.NewPublisher(conn)
+		if err != nil {
+			log.Fatalf("Failed to create publisher: %v", err)
+		}
+		defer publisher.Close()
+	}
+
 	// Initialize services if connected to RabbitMQ
 	if conn.IsConnected() {
 		if err := initializeServices(ctx, conn); err != nil {
@@ -42,9 +58,43 @@ func main() {
 		}
 	}
 
+	// Setup HTTP server with tracking API
+	mux := http.NewServeMux()
+
+	// Create middleware
+	rateLimiter := middleware.NewRateLimiter(cfg.API.RateLimitPerMin, time.Minute)
+	hmacValidator := middleware.NewHMACValidator(cfg.API.HMACSecret)
+
+	// Create tracking handler
+	trackingHandler := handlers.NewTrackingHandler(publisher, rateLimiter, hmacValidator)
+	mux.Handle("/api/v1/tracking", trackingHandler)
+
+	// Health check endpoint
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"healthy"}`))
+	})
+
+	// Start HTTP server
+	server := &http.Server{
+		Addr:         fmt.Sprintf(":%s", cfg.Server.Port),
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Starting HTTP server on port %s", cfg.Server.Port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
+
 	log.Println("GridFlow-Dynamics Platform is running")
 	log.Printf("Configured to support 200 simultaneous crews")
-	log.Printf("Server port: %s", cfg.Server.Port)
+	log.Printf("Tracking API endpoint: POST /api/v1/tracking")
+	log.Printf("Rate limit: %d requests/minute per crew", cfg.API.RateLimitPerMin)
 
 	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
@@ -52,6 +102,13 @@ func main() {
 	<-sigChan
 
 	log.Println("Shutting down GridFlow-Dynamics Platform...")
+
+	// Graceful shutdown of HTTP server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("HTTP server shutdown error: %v", err)
+	}
 }
 
 func initializeServices(ctx context.Context, conn *messaging.Connection) error {

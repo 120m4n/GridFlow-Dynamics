@@ -13,6 +13,7 @@ func TestExchangeConstants(t *testing.T) {
 		{"ExchangeCrewEvents", ExchangeCrewEvents, "crew.events"},
 		{"ExchangeTaskEvents", ExchangeTaskEvents, "task.events"},
 		{"ExchangeAlertEvents", ExchangeAlertEvents, "alert.events"},
+		{"ExchangeCrewLocations", ExchangeCrewLocations, "crew.locations"},
 	}
 
 	for _, tt := range tests {
