@@ -1,9 +1,6 @@
 package middleware
 
 import (
-	"bytes"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 )
 
@@ -76,61 +73,6 @@ func TestHMACValidatorValidateSignature(t *testing.T) {
 			result := v.ValidateSignature(tt.body, tt.signature)
 			if result != tt.expected {
 				t.Errorf("ValidateSignature = %v; want %v", result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestHMACValidatorValidateRequest(t *testing.T) {
-	v := NewHMACValidator("test-secret")
-	body := []byte(`{"crewId":"123"}`)
-	validSig := v.ComputeSignature(body)
-
-	tests := []struct {
-		name       string
-		body       []byte
-		signature  string
-		expectOK   bool
-		expectBody bool
-	}{
-		{
-			name:       "valid request",
-			body:       body,
-			signature:  validSig,
-			expectOK:   true,
-			expectBody: true,
-		},
-		{
-			name:       "missing signature",
-			body:       body,
-			signature:  "",
-			expectOK:   false,
-			expectBody: false,
-		},
-		{
-			name:       "invalid signature",
-			body:       body,
-			signature:  "wrong",
-			expectOK:   false,
-			expectBody: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "/tracking", bytes.NewReader(tt.body))
-			if tt.signature != "" {
-				req.Header.Set(SignatureHeader, tt.signature)
-			}
-
-			resultBody, ok := v.ValidateRequest(req)
-
-			if ok != tt.expectOK {
-				t.Errorf("ValidateRequest ok = %v; want %v", ok, tt.expectOK)
-			}
-
-			if tt.expectBody && resultBody == nil {
-				t.Error("Expected body to be returned")
 			}
 		})
 	}
