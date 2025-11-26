@@ -5,11 +5,12 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/gofiber/fiber/v2"
 
 	"github.com/120m4n/GridFlow-Dynamics/internal/api/handlers"
 	"github.com/120m4n/GridFlow-Dynamics/internal/api/middleware"
@@ -58,8 +59,12 @@ func main() {
 		}
 	}
 
-	// Setup HTTP server with tracking API
-	mux := http.NewServeMux()
+	// Setup Fiber app
+	app := fiber.New(fiber.Config{
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	})
 
 	// Create middleware
 	rateLimiter := middleware.NewRateLimiter(cfg.API.RateLimitPerMin, time.Minute)
@@ -67,26 +72,18 @@ func main() {
 
 	// Create tracking handler
 	trackingHandler := handlers.NewTrackingHandler(publisher, rateLimiter, hmacValidator)
-	mux.Handle("/api/v1/tracking", trackingHandler)
+	app.Post("/api/v1/tracking", trackingHandler.Handle)
 
 	// Health check endpoint
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"healthy"}`))
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "healthy"})
 	})
 
-	// Start HTTP server
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%s", cfg.Server.Port),
-		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
+	// Start HTTP server in a goroutine
 	go func() {
+		addr := fmt.Sprintf(":%s", cfg.Server.Port)
 		log.Printf("Starting HTTP server on port %s", cfg.Server.Port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := app.Listen(addr); err != nil {
 			log.Fatalf("HTTP server failed: %v", err)
 		}
 	}()
@@ -104,9 +101,7 @@ func main() {
 	log.Println("Shutting down GridFlow-Dynamics Platform...")
 
 	// Graceful shutdown of HTTP server
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
+	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
 		log.Printf("HTTP server shutdown error: %v", err)
 	}
 }

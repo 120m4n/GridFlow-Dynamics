@@ -4,8 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"io"
-	"net/http"
 )
 
 const (
@@ -45,20 +43,4 @@ func (v *HMACValidator) ComputeSignature(body []byte) string {
 	mac := hmac.New(sha256.New, v.secretKey)
 	mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// ValidateRequest validates the signature from an HTTP request.
-// It reads the body and returns it for further processing.
-func (v *HMACValidator) ValidateRequest(r *http.Request) ([]byte, bool) {
-	signature := r.Header.Get(SignatureHeader)
-	if signature == "" {
-		return nil, false
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		return nil, false
-	}
-
-	return body, v.ValidateSignature(body, signature)
 }

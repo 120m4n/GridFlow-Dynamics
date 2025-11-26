@@ -1,12 +1,14 @@
 package handlers
 
 import (
-	"bytes"
 	"encoding/json"
-	"net/http"
+	"io"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/gofiber/fiber/v2"
 
 	"github.com/120m4n/GridFlow-Dynamics/internal/api/middleware"
 	"github.com/120m4n/GridFlow-Dynamics/internal/domain"
@@ -36,65 +38,75 @@ func TestUUIDRegex(t *testing.T) {
 }
 
 func TestTrackingHandlerMethodNotAllowed(t *testing.T) {
+	app := fiber.New()
 	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
 	hmacValidator := middleware.NewHMACValidator("test-secret")
 	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator)
 
-	methods := []string{http.MethodGet, http.MethodPut, http.MethodDelete, http.MethodPatch}
+	// Only POST is allowed
+	app.Post("/api/v1/tracking", handler.Handle)
+
+	methods := []string{"GET", "PUT", "DELETE", "PATCH"}
 
 	for _, method := range methods {
 		t.Run(method, func(t *testing.T) {
 			req := httptest.NewRequest(method, "/api/v1/tracking", nil)
-			rr := httptest.NewRecorder()
+			resp, _ := app.Test(req)
 
-			handler.ServeHTTP(rr, req)
-
-			if rr.Code != http.StatusMethodNotAllowed {
-				t.Errorf("Status code = %d; want %d", rr.Code, http.StatusMethodNotAllowed)
+			// Fiber returns 405 for methods not allowed when route is not registered
+			if resp.StatusCode != fiber.StatusMethodNotAllowed {
+				t.Errorf("Status code = %d; want %d", resp.StatusCode, fiber.StatusMethodNotAllowed)
 			}
 		})
 	}
 }
 
 func TestTrackingHandlerMissingSignature(t *testing.T) {
+	app := fiber.New()
 	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
 	hmacValidator := middleware.NewHMACValidator("test-secret")
 	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator)
 
-	body := []byte(`{"crewId":"550e8400-e29b-41d4-a716-446655440000"}`)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracking", bytes.NewReader(body))
-	rr := httptest.NewRecorder()
+	app.Post("/api/v1/tracking", handler.Handle)
 
-	handler.ServeHTTP(rr, req)
+	body := `{"crewId":"550e8400-e29b-41d4-a716-446655440000"}`
+	req := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := app.Test(req)
 
-	if rr.Code != http.StatusUnauthorized {
-		t.Errorf("Status code = %d; want %d", rr.Code, http.StatusUnauthorized)
+	if resp.StatusCode != fiber.StatusUnauthorized {
+		t.Errorf("Status code = %d; want %d", resp.StatusCode, fiber.StatusUnauthorized)
 	}
 }
 
 func TestTrackingHandlerInvalidJSON(t *testing.T) {
+	app := fiber.New()
 	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
 	hmacValidator := middleware.NewHMACValidator("test-secret")
 	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator)
 
-	body := []byte(`{invalid json}`)
-	sig := hmacValidator.ComputeSignature(body)
+	app.Post("/api/v1/tracking", handler.Handle)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracking", bytes.NewReader(body))
+	body := `{invalid json}`
+	sig := hmacValidator.ComputeSignature([]byte(body))
+
+	req := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(middleware.SignatureHeader, sig)
-	rr := httptest.NewRecorder()
+	resp, _ := app.Test(req)
 
-	handler.ServeHTTP(rr, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("Status code = %d; want %d", rr.Code, http.StatusBadRequest)
+	if resp.StatusCode != fiber.StatusBadRequest {
+		t.Errorf("Status code = %d; want %d", resp.StatusCode, fiber.StatusBadRequest)
 	}
 }
 
 func TestTrackingHandlerValidation(t *testing.T) {
+	app := fiber.New()
 	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
 	hmacValidator := middleware.NewHMACValidator("test-secret")
 	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator)
+
+	app.Post("/api/v1/tracking", handler.Handle)
 
 	tests := []struct {
 		name        string
@@ -180,23 +192,25 @@ func TestTrackingHandlerValidation(t *testing.T) {
 			body, _ := json.Marshal(tt.payload)
 			sig := hmacValidator.ComputeSignature(body)
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/tracking", bytes.NewReader(body))
+			req := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body)))
+			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set(middleware.SignatureHeader, sig)
-			rr := httptest.NewRecorder()
+			resp, _ := app.Test(req)
 
-			handler.ServeHTTP(rr, req)
-
-			if tt.expectError && rr.Code != http.StatusBadRequest {
-				t.Errorf("Status code = %d; want %d for %s", rr.Code, http.StatusBadRequest, tt.name)
+			if tt.expectError && resp.StatusCode != fiber.StatusBadRequest {
+				t.Errorf("Status code = %d; want %d for %s", resp.StatusCode, fiber.StatusBadRequest, tt.name)
 			}
 		})
 	}
 }
 
 func TestTrackingHandlerRateLimiting(t *testing.T) {
+	app := fiber.New()
 	rateLimiter := middleware.NewRateLimiter(2, time.Minute)
 	hmacValidator := middleware.NewHMACValidator("test-secret")
 	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator)
+
+	app.Post("/api/v1/tracking", handler.Handle)
 
 	payload := domain.TrackingPayload{
 		CrewID:             "550e8400-e29b-41d4-a716-446655440000",
@@ -209,26 +223,72 @@ func TestTrackingHandlerRateLimiting(t *testing.T) {
 	body, _ := json.Marshal(payload)
 	sig := hmacValidator.ComputeSignature(body)
 
-	// First 2 requests should pass validation (may fail at publish since no publisher)
+	// First 2 requests should pass validation (may succeed since no publisher)
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/tracking", bytes.NewReader(body))
+		req := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set(middleware.SignatureHeader, sig)
-		rr := httptest.NewRecorder()
-		handler.ServeHTTP(rr, req)
-		// Should not be rate limited (may be 500 due to nil publisher)
-		if rr.Code == http.StatusTooManyRequests {
+		resp, _ := app.Test(req)
+		// Should not be rate limited (will be 200 since no publisher)
+		if resp.StatusCode == fiber.StatusTooManyRequests {
 			t.Errorf("Request %d should not be rate limited", i+1)
 		}
 	}
 
 	// 3rd request should be rate limited
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/tracking", bytes.NewReader(body))
+	req := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(middleware.SignatureHeader, sig)
-	rr := httptest.NewRecorder()
-	handler.ServeHTTP(rr, req)
+	resp, _ := app.Test(req)
 
-	if rr.Code != http.StatusTooManyRequests {
-		t.Errorf("Status code = %d; want %d", rr.Code, http.StatusTooManyRequests)
+	if resp.StatusCode != fiber.StatusTooManyRequests {
+		t.Errorf("Status code = %d; want %d", resp.StatusCode, fiber.StatusTooManyRequests)
+	}
+}
+
+func TestTrackingHandlerSuccess(t *testing.T) {
+	app := fiber.New()
+	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
+	hmacValidator := middleware.NewHMACValidator("test-secret")
+	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator)
+
+	app.Post("/api/v1/tracking", handler.Handle)
+
+	payload := domain.TrackingPayload{
+		CrewID:             "550e8400-e29b-41d4-a716-446655440000",
+		Timestamp:          time.Now(),
+		GPSCoordinates:     domain.GPSCoordinates{Latitude: 40.0, Longitude: -74.0},
+		Status:             domain.TrackingStatusWorking,
+		ProgressPercentage: 50,
+		BatteryLevel:       80,
+	}
+	body, _ := json.Marshal(payload)
+	sig := hmacValidator.ComputeSignature(body)
+
+	req := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(middleware.SignatureHeader, sig)
+	resp, _ := app.Test(req)
+
+	if resp.StatusCode != fiber.StatusOK {
+		t.Errorf("Status code = %d; want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	// Read response body
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+	var response TrackingResponse
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	if !response.Success {
+		t.Error("Response should be successful")
+	}
+	if response.RequestID != payload.CrewID {
+		t.Errorf("RequestID = %s; want %s", response.RequestID, payload.CrewID)
 	}
 }
 

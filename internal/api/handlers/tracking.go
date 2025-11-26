@@ -2,14 +2,13 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/gofiber/fiber/v2"
 
 	"github.com/120m4n/GridFlow-Dynamics/internal/api/middleware"
 	"github.com/120m4n/GridFlow-Dynamics/internal/domain"
@@ -43,48 +42,37 @@ type TrackingResponse struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
-// ServeHTTP handles POST requests to the tracking endpoint.
-func (h *TrackingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	// Only accept POST requests
-	if r.Method != http.MethodPost {
-		h.sendError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
-
-	// Validate HMAC signature and read body
-	body, valid := h.hmacValidator.ValidateRequest(r)
-	if !valid {
-		h.sendError(w, http.StatusUnauthorized, "Invalid or missing HMAC signature")
-		return
+// Handle handles POST requests to the tracking endpoint using Fiber.
+func (h *TrackingHandler) Handle(c *fiber.Ctx) error {
+	// Validate HMAC signature
+	body := c.Body()
+	signature := c.Get(middleware.SignatureHeader)
+	if !h.hmacValidator.ValidateSignature(body, signature) {
+		return h.sendError(c, fiber.StatusUnauthorized, "Invalid or missing HMAC signature")
 	}
 
 	// Parse the payload
 	var payload domain.TrackingPayload
-	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&payload); err != nil {
-		h.sendError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON payload: %v", err))
-		return
+	if err := c.BodyParser(&payload); err != nil {
+		return h.sendError(c, fiber.StatusBadRequest, fmt.Sprintf("Invalid JSON payload: %v", err))
 	}
 
 	// Validate the payload
 	if err := h.validatePayload(&payload); err != nil {
-		h.sendError(w, http.StatusBadRequest, err.Error())
-		return
+		return h.sendError(c, fiber.StatusBadRequest, err.Error())
 	}
 
 	// Check rate limit
 	if !h.rateLimiter.Allow(payload.CrewID) {
 		remaining := h.rateLimiter.Remaining(payload.CrewID)
-		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
-		h.sendError(w, http.StatusTooManyRequests, "Rate limit exceeded (100 requests/minute)")
-		return
+		c.Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+		return h.sendError(c, fiber.StatusTooManyRequests, "Rate limit exceeded (100 requests/minute)")
 	}
 
 	// Set rate limit header
 	remaining := h.rateLimiter.Remaining(payload.CrewID)
-	w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
-	w.Header().Set("X-RateLimit-Limit", "100")
+	c.Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
+	c.Set("X-RateLimit-Limit", "100")
 
 	// Convert to tracking event
 	event := h.payloadToEvent(&payload)
@@ -97,8 +85,7 @@ func (h *TrackingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if err := h.publisher.Publish(ctx, messaging.ExchangeCrewLocations, routingKey, event); err != nil {
 			log.Printf("Failed to publish tracking event: %v", err)
-			h.sendError(w, http.StatusInternalServerError, "Failed to process tracking update")
-			return
+			return h.sendError(c, fiber.StatusInternalServerError, "Failed to process tracking update")
 		}
 	}
 
@@ -107,7 +94,7 @@ func (h *TrackingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		payload.GPSCoordinates.Latitude, payload.GPSCoordinates.Longitude)
 
 	// Send success response
-	h.sendSuccess(w, "Tracking update processed successfully", payload.CrewID)
+	return h.sendSuccess(c, "Tracking update processed successfully", payload.CrewID)
 }
 
 func (h *TrackingHandler) validatePayload(p *domain.TrackingPayload) error {
@@ -176,17 +163,15 @@ func (h *TrackingHandler) payloadToEvent(p *domain.TrackingPayload) *domain.Trac
 	}
 }
 
-func (h *TrackingHandler) sendError(w http.ResponseWriter, status int, message string) {
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(TrackingResponse{
+func (h *TrackingHandler) sendError(c *fiber.Ctx, status int, message string) error {
+	return c.Status(status).JSON(TrackingResponse{
 		Success: false,
 		Error:   message,
 	})
 }
 
-func (h *TrackingHandler) sendSuccess(w http.ResponseWriter, message string, requestID string) {
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(TrackingResponse{
+func (h *TrackingHandler) sendSuccess(c *fiber.Ctx, message string, requestID string) error {
+	return c.Status(fiber.StatusOK).JSON(TrackingResponse{
 		Success:   true,
 		Message:   message,
 		RequestID: requestID,
