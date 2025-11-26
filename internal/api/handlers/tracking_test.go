@@ -275,9 +275,14 @@ func TestTrackingHandlerSuccess(t *testing.T) {
 	}
 
 	// Read response body
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
 	var response TrackingResponse
-	json.Unmarshal(respBody, &response)
+	if err := json.Unmarshal(respBody, &response); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
 
 	if !response.Success {
 		t.Error("Response should be successful")
