@@ -1,0 +1,41 @@
+// Package config provides configuration management for the GridFlow-Dynamics platform.
+package config
+
+import (
+	"os"
+)
+
+// Config holds all configuration for the application.
+type Config struct {
+	RabbitMQ RabbitMQConfig
+	Server   ServerConfig
+}
+
+// RabbitMQConfig holds RabbitMQ connection settings.
+type RabbitMQConfig struct {
+	URL string
+}
+
+// ServerConfig holds server settings.
+type ServerConfig struct {
+	Port string
+}
+
+// Load reads configuration from environment variables with defaults.
+func Load() *Config {
+	return &Config{
+		RabbitMQ: RabbitMQConfig{
+			URL: getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/"),
+		},
+		Server: ServerConfig{
+			Port: getEnv("SERVER_PORT", "8080"),
+		},
+	}
+}
+
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
