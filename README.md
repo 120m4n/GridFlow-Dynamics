@@ -92,6 +92,14 @@ Recibe mensajes JSON cada 30 segundos desde aplicación móvil de campo.
 | X-Signature-256 | Firma HMAC-SHA256 del body |
 | Content-Type | application/json |
 
+#### Headers de Respuesta
+
+| Header | Descripción |
+|--------|-------------|
+| X-Idempotency-Key | Clave de idempotencia calculada (cuando está habilitada) |
+| X-RateLimit-Remaining | Solicitudes restantes en la ventana actual |
+| X-RateLimit-Limit | Límite de solicitudes por ventana |
+
 #### Respuesta Exitosa (200)
 
 ```json
@@ -166,6 +174,132 @@ Variables de entorno:
 | RABBITMQ_URL | URL de conexión a RabbitMQ | amqp://guest:guest@localhost:5672/ |
 | SERVER_PORT | Puerto del servidor | 8080 |
 | HMAC_SECRET | Secreto para validación HMAC-SHA256 | default-secret-change-in-production |
+| IDEMPOTENCY_ENABLED | Habilitar idempotencia en API | true |
+| IDEMPOTENCY_TTL | Tiempo de vida de registros de idempotencia | 5m |
+| IDEMPOTENCY_CLEANUP_INTERVAL | Intervalo de limpieza de registros expirados | 1m |
+| IDEMPOTENCY_SECRET | Secreto para generación de claves de idempotencia | idempotency-secret-change-in-production |
+
+## Idempotencia
+
+El sistema implementa idempotencia para evitar el procesamiento de solicitudes duplicadas. Esta funcionalidad es especialmente útil para garantizar la entrega exactamente una vez en escenarios donde las solicitudes pueden ser retransmitidas.
+
+### Funcionamiento
+
+1. **Generación de Clave**: Se calcula un hash HMAC-SHA256 del cuerpo de la solicitud para generar una clave única de idempotencia.
+2. **Verificación de Duplicados**: Antes de procesar una solicitud, se verifica si ya existe una respuesta cacheada para esa clave.
+3. **Caching de Respuestas**: Las respuestas exitosas se almacenan con un TTL configurable.
+4. **Headers de Respuesta**: La clave de idempotencia se devuelve en el header `X-Idempotency-Key`.
+
+### Arquitectura Redis-Ready
+
+El sistema está diseñado para integrar fácilmente Redis como backend de persistencia. Actualmente utiliza almacenamiento en memoria, pero la interfaz `IdempotencyStore` permite implementaciones alternativas.
+
+#### Integración con Redis
+
+Para implementar persistencia con Redis, cree una nueva implementación de `IdempotencyStore`:
+
+```go
+package middleware
+
+import (
+    "context"
+    "encoding/json"
+    "time"
+    
+    "github.com/redis/go-redis/v9"
+)
+
+type RedisIdempotencyStore struct {
+    client *redis.Client
+    ttl    time.Duration
+}
+
+func NewRedisIdempotencyStore(redisURL string, ttl time.Duration) (*RedisIdempotencyStore, error) {
+    opt, err := redis.ParseURL(redisURL)
+    if err != nil {
+        return nil, err
+    }
+    
+    client := redis.NewClient(opt)
+    
+    // Verificar conexión
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    if err := client.Ping(ctx).Err(); err != nil {
+        return nil, err
+    }
+    
+    return &RedisIdempotencyStore{
+        client: client,
+        ttl:    ttl,
+    }, nil
+}
+
+func (s *RedisIdempotencyStore) Set(key string, result *IdempotencyResult) error {
+    ctx := context.Background()
+    data, err := json.Marshal(result)
+    if err != nil {
+        return err
+    }
+    return s.client.SetEx(ctx, "idempotency:"+key, data, s.ttl).Err()
+}
+
+func (s *RedisIdempotencyStore) Get(key string) (*IdempotencyResult, bool, error) {
+    ctx := context.Background()
+    data, err := s.client.Get(ctx, "idempotency:"+key).Bytes()
+    if err == redis.Nil {
+        return nil, false, nil
+    }
+    if err != nil {
+        return nil, false, err
+    }
+    
+    var result IdempotencyResult
+    if err := json.Unmarshal(data, &result); err != nil {
+        return nil, false, err
+    }
+    return &result, true, nil
+}
+
+func (s *RedisIdempotencyStore) Exists(key string) (bool, error) {
+    ctx := context.Background()
+    n, err := s.client.Exists(ctx, "idempotency:"+key).Result()
+    return n > 0, err
+}
+
+func (s *RedisIdempotencyStore) Delete(key string) error {
+    ctx := context.Background()
+    return s.client.Del(ctx, "idempotency:"+key).Err()
+}
+
+func (s *RedisIdempotencyStore) Close() error {
+    return s.client.Close()
+}
+```
+
+#### Configuración de Redis
+
+Agregue la variable de entorno `REDIS_URL` y modifique `main.go`:
+
+```go
+// En main.go, reemplace la creación del store
+var idempotencyStore middleware.IdempotencyStore
+if redisURL := os.Getenv("REDIS_URL"); redisURL != "" {
+    var err error
+    idempotencyStore, err = middleware.NewRedisIdempotencyStore(
+        redisURL,
+        cfg.Idempotency.TTL,
+    )
+    if err != nil {
+        log.Fatalf("Failed to connect to Redis: %v", err)
+    }
+} else {
+    idempotencyStore = middleware.NewInMemoryIdempotencyStore(
+        cfg.Idempotency.TTL,
+        cfg.Idempotency.CleanupInterval,
+    )
+}
+```
 
 ## Ejecución
 
@@ -217,6 +351,7 @@ GridFlow-Dynamics/
 │   │   │   └── tracking.go      # Handler del endpoint de tracking
 │   │   └── middleware/
 │   │       ├── hmac.go          # Validación HMAC-SHA256
+│   │       ├── idempotency.go   # Middleware de idempotencia
 │   │       └── ratelimit.go     # Rate limiting por cuadrilla
 │   ├── config/
 │   │   └── config.go            # Gestión de configuración
@@ -245,6 +380,7 @@ El sistema está diseñado para soportar:
 
 - **200 cuadrillas simultáneas** reportando en tiempo real
 - **Rate limiting**: 100 solicitudes/minuto por cuadrilla
+- **Idempotencia**: Detección y manejo de solicitudes duplicadas con HMAC-SHA256
 - **Seguridad**: Validación HMAC-SHA256 en cada solicitud
 - Eventos persistentes en RabbitMQ para garantizar entrega
 - Arquitectura desacoplada para escalabilidad horizontal

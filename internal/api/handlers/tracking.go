@@ -15,23 +15,38 @@ import (
 	"github.com/120m4n/GridFlow-Dynamics/internal/messaging"
 )
 
+// IdempotencyKeyHeader is the HTTP header for returning the idempotency key.
+const IdempotencyKeyHeader = "X-Idempotency-Key"
+
 // UUIDRegex validates UUID format.
 var UUIDRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // TrackingHandler handles crew tracking requests.
 type TrackingHandler struct {
-	publisher     *messaging.Publisher
-	rateLimiter   *middleware.RateLimiter
-	hmacValidator *middleware.HMACValidator
+	publisher              *messaging.Publisher
+	rateLimiter            *middleware.RateLimiter
+	hmacValidator          *middleware.HMACValidator
+	idempotencyMiddleware  *middleware.IdempotencyMiddleware
+	idempotencyEnabled     bool
 }
 
 // NewTrackingHandler creates a new tracking handler.
 func NewTrackingHandler(publisher *messaging.Publisher, rateLimiter *middleware.RateLimiter, hmacValidator *middleware.HMACValidator) *TrackingHandler {
 	return &TrackingHandler{
-		publisher:     publisher,
-		rateLimiter:   rateLimiter,
-		hmacValidator: hmacValidator,
+		publisher:          publisher,
+		rateLimiter:        rateLimiter,
+		hmacValidator:      hmacValidator,
+		idempotencyEnabled: false,
 	}
+}
+
+// WithIdempotency adds idempotency middleware to the handler.
+// When enabled, duplicate requests (identified by HMAC of body content)
+// will receive cached responses instead of being processed again.
+func (h *TrackingHandler) WithIdempotency(idempotencyMiddleware *middleware.IdempotencyMiddleware) *TrackingHandler {
+	h.idempotencyMiddleware = idempotencyMiddleware
+	h.idempotencyEnabled = true
+	return h
 }
 
 // TrackingResponse represents the API response.
@@ -49,6 +64,20 @@ func (h *TrackingHandler) Handle(c *fiber.Ctx) error {
 	signature := c.Get(middleware.SignatureHeader)
 	if !h.hmacValidator.ValidateSignature(body, signature) {
 		return h.sendError(c, fiber.StatusUnauthorized, "Invalid or missing HMAC signature")
+	}
+
+	// Check for duplicate request if idempotency is enabled
+	var idempotencyKey string
+	if h.idempotencyEnabled && h.idempotencyMiddleware != nil {
+		idempotencyKey = h.idempotencyMiddleware.GenerateKey(body)
+		c.Set(IdempotencyKeyHeader, idempotencyKey)
+
+		// Check if this request has been processed before
+		if result, exists, err := h.idempotencyMiddleware.CheckDuplicate(idempotencyKey); err == nil && exists {
+			log.Printf("Duplicate request detected, returning cached response (key: %s...)", idempotencyKey[:16])
+			c.Set("Content-Type", result.ContentType)
+			return c.Status(result.StatusCode).Send(result.Body)
+		}
 	}
 
 	// Parse the payload
@@ -93,8 +122,8 @@ func (h *TrackingHandler) Handle(c *fiber.Ctx) error {
 		payload.CrewID, payload.Status, payload.ProgressPercentage,
 		payload.GPSCoordinates.Latitude, payload.GPSCoordinates.Longitude)
 
-	// Send success response
-	return h.sendSuccess(c, "Tracking update processed successfully", payload.CrewID)
+	// Send success response and cache it for idempotency
+	return h.sendSuccessWithIdempotency(c, "Tracking update processed successfully", payload.CrewID, idempotencyKey)
 }
 
 func (h *TrackingHandler) validatePayload(p *domain.TrackingPayload) error {
@@ -176,4 +205,25 @@ func (h *TrackingHandler) sendSuccess(c *fiber.Ctx, message string, requestID st
 		Message:   message,
 		RequestID: requestID,
 	})
+}
+
+// sendSuccessWithIdempotency sends a success response and caches it if idempotency is enabled.
+func (h *TrackingHandler) sendSuccessWithIdempotency(c *fiber.Ctx, message string, requestID string, idempotencyKey string) error {
+	response := TrackingResponse{
+		Success:   true,
+		Message:   message,
+		RequestID: requestID,
+	}
+
+	// Cache the response if idempotency is enabled
+	if h.idempotencyEnabled && h.idempotencyMiddleware != nil && idempotencyKey != "" {
+		responseBody, err := c.App().Config().JSONEncoder(response)
+		if err == nil {
+			if storeErr := h.idempotencyMiddleware.StoreResult(idempotencyKey, fiber.StatusOK, responseBody, "application/json"); storeErr != nil {
+				log.Printf("Failed to cache idempotency result: %v", storeErr)
+			}
+		}
+	}
+
+	return c.Status(fiber.StatusOK).JSON(response)
 }

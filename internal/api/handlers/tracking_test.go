@@ -311,3 +311,176 @@ func TestTrackingResponse(t *testing.T) {
 		t.Errorf("RequestID = %s; want test-123", resp.RequestID)
 	}
 }
+
+func TestTrackingHandlerWithIdempotency(t *testing.T) {
+	app := fiber.New()
+	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
+	hmacValidator := middleware.NewHMACValidator("test-secret")
+	
+	// Create idempotency store and middleware
+	idempotencyStore := middleware.NewInMemoryIdempotencyStore(time.Minute, 30*time.Second)
+	defer idempotencyStore.Close()
+	idempotencyMiddleware := middleware.NewIdempotencyMiddleware(idempotencyStore, "idempotency-secret")
+	
+	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator).WithIdempotency(idempotencyMiddleware)
+
+	app.Post("/api/v1/tracking", handler.Handle)
+
+	payload := domain.TrackingPayload{
+		CrewID:             "550e8400-e29b-41d4-a716-446655440000",
+		Timestamp:          time.Now(),
+		GPSCoordinates:     domain.GPSCoordinates{Latitude: 40.0, Longitude: -74.0},
+		Status:             domain.TrackingStatusWorking,
+		ProgressPercentage: 50,
+		BatteryLevel:       80,
+	}
+	body, _ := json.Marshal(payload)
+	sig := hmacValidator.ComputeSignature(body)
+
+	// First request should succeed
+	req1 := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body)))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set(middleware.SignatureHeader, sig)
+	resp1, _ := app.Test(req1)
+
+	if resp1.StatusCode != fiber.StatusOK {
+		t.Errorf("First request status code = %d; want %d", resp1.StatusCode, fiber.StatusOK)
+	}
+
+	// Check idempotency key header is set
+	idempotencyKey := resp1.Header.Get(IdempotencyKeyHeader)
+	if idempotencyKey == "" {
+		t.Error("Idempotency key header should be set")
+	}
+
+	// Read first response
+	respBody1, _ := io.ReadAll(resp1.Body)
+	var response1 TrackingResponse
+	json.Unmarshal(respBody1, &response1)
+
+	// Second request with same body should return cached response
+	req2 := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body)))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set(middleware.SignatureHeader, sig)
+	resp2, _ := app.Test(req2)
+
+	if resp2.StatusCode != fiber.StatusOK {
+		t.Errorf("Second request status code = %d; want %d", resp2.StatusCode, fiber.StatusOK)
+	}
+
+	// Read second response
+	respBody2, _ := io.ReadAll(resp2.Body)
+	var response2 TrackingResponse
+	json.Unmarshal(respBody2, &response2)
+
+	// Both responses should be the same
+	if response1.RequestID != response2.RequestID {
+		t.Errorf("Response RequestID mismatch: %s vs %s", response1.RequestID, response2.RequestID)
+	}
+	if response1.Message != response2.Message {
+		t.Errorf("Response Message mismatch: %s vs %s", response1.Message, response2.Message)
+	}
+}
+
+func TestTrackingHandlerIdempotencyDifferentPayloads(t *testing.T) {
+	app := fiber.New()
+	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
+	hmacValidator := middleware.NewHMACValidator("test-secret")
+	
+	// Create idempotency store and middleware
+	idempotencyStore := middleware.NewInMemoryIdempotencyStore(time.Minute, 30*time.Second)
+	defer idempotencyStore.Close()
+	idempotencyMiddleware := middleware.NewIdempotencyMiddleware(idempotencyStore, "idempotency-secret")
+	
+	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator).WithIdempotency(idempotencyMiddleware)
+
+	app.Post("/api/v1/tracking", handler.Handle)
+
+	// First payload
+	payload1 := domain.TrackingPayload{
+		CrewID:             "550e8400-e29b-41d4-a716-446655440000",
+		Timestamp:          time.Now(),
+		GPSCoordinates:     domain.GPSCoordinates{Latitude: 40.0, Longitude: -74.0},
+		Status:             domain.TrackingStatusWorking,
+		ProgressPercentage: 50,
+		BatteryLevel:       80,
+	}
+	body1, _ := json.Marshal(payload1)
+	sig1 := hmacValidator.ComputeSignature(body1)
+
+	// Second payload (different progress)
+	payload2 := domain.TrackingPayload{
+		CrewID:             "550e8400-e29b-41d4-a716-446655440000",
+		Timestamp:          time.Now(),
+		GPSCoordinates:     domain.GPSCoordinates{Latitude: 40.0, Longitude: -74.0},
+		Status:             domain.TrackingStatusWorking,
+		ProgressPercentage: 75, // Different progress
+		BatteryLevel:       80,
+	}
+	body2, _ := json.Marshal(payload2)
+	sig2 := hmacValidator.ComputeSignature(body2)
+
+	// First request
+	req1 := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body1)))
+	req1.Header.Set("Content-Type", "application/json")
+	req1.Header.Set(middleware.SignatureHeader, sig1)
+	resp1, _ := app.Test(req1)
+	idempotencyKey1 := resp1.Header.Get(IdempotencyKeyHeader)
+
+	// Second request with different payload should get different idempotency key
+	req2 := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body2)))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set(middleware.SignatureHeader, sig2)
+	resp2, _ := app.Test(req2)
+	idempotencyKey2 := resp2.Header.Get(IdempotencyKeyHeader)
+
+	if idempotencyKey1 == idempotencyKey2 {
+		t.Error("Different payloads should have different idempotency keys")
+	}
+
+	// Both requests should succeed (not be blocked as duplicates)
+	if resp1.StatusCode != fiber.StatusOK {
+		t.Errorf("First request status code = %d; want %d", resp1.StatusCode, fiber.StatusOK)
+	}
+	if resp2.StatusCode != fiber.StatusOK {
+		t.Errorf("Second request status code = %d; want %d", resp2.StatusCode, fiber.StatusOK)
+	}
+}
+
+func TestTrackingHandlerIdempotencyDisabled(t *testing.T) {
+	app := fiber.New()
+	rateLimiter := middleware.NewRateLimiter(100, time.Minute)
+	hmacValidator := middleware.NewHMACValidator("test-secret")
+	
+	// Handler without idempotency
+	handler := NewTrackingHandler(nil, rateLimiter, hmacValidator)
+
+	app.Post("/api/v1/tracking", handler.Handle)
+
+	payload := domain.TrackingPayload{
+		CrewID:             "550e8400-e29b-41d4-a716-446655440000",
+		Timestamp:          time.Now(),
+		GPSCoordinates:     domain.GPSCoordinates{Latitude: 40.0, Longitude: -74.0},
+		Status:             domain.TrackingStatusWorking,
+		ProgressPercentage: 50,
+		BatteryLevel:       80,
+	}
+	body, _ := json.Marshal(payload)
+	sig := hmacValidator.ComputeSignature(body)
+
+	req := httptest.NewRequest("POST", "/api/v1/tracking", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(middleware.SignatureHeader, sig)
+	resp, _ := app.Test(req)
+
+	// Should work without idempotency
+	if resp.StatusCode != fiber.StatusOK {
+		t.Errorf("Request status code = %d; want %d", resp.StatusCode, fiber.StatusOK)
+	}
+
+	// Should not have idempotency key header when disabled
+	idempotencyKey := resp.Header.Get(IdempotencyKeyHeader)
+	if idempotencyKey != "" {
+		t.Error("Idempotency key header should not be set when idempotency is disabled")
+	}
+}
