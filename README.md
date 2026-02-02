@@ -4,36 +4,28 @@ Sistema de Seguimiento de Construcción de Red Eléctrica Basado en Eventos
 
 ## Descripción
 
-GridFlow-Dynamics es una plataforma distribuida para monitorear en tiempo real la construcción y mantenimiento de infraestructura eléctrica utilizando arquitectura event-driven con RabbitMQ como backbone de mensajería. El sistema está diseñado para gestionar 200 cuadrillas simultáneas reportando ubicación, estado de tareas y alertas desde terreno.
+GridFlow-Dynamics es una plataforma distribuida para monitorear en tiempo real la construcción y mantenimiento de infraestructura eléctrica utilizando arquitectura event-driven con NATS como backbone de mensajería. El sistema está diseñado para gestionar 200 cuadrillas simultáneas reportando inventario y progreso desde terreno.
 
 ## Arquitectura
 
-La solución emplea microservicios desacoplados comunicados mediante eventos persistentes en RabbitMQ:
+La solución emplea una API REST que publica eventos a NATS:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                     GridFlow-Dynamics Platform                    │
 ├──────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐   │
-│  │  Crew Tracking  │  │ Task Management │  │Alert Management │   │
-│  │    Service      │  │     Service     │  │    Service      │   │
-│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘   │
-│           │                    │                    │            │
-│  ┌────────┴────────────────────┴────────────────────┴────────┐   │
+│  ┌────────────────────────────────────────────────────────────┐   │
 │  │                    REST API Layer                          │   │
-│  │  POST /api/v1/tracking (Waze-like crew tracking)          │   │
+│  │  POST /api/v1/mensaje_inventario/cuadrilla                 │   │
 │  └────────────────────────────────────────────────────────────┘   │
 │                                │                                 │
 │                    ┌───────────▼───────────┐                     │
-│                    │       RabbitMQ        │                     │
+│                    │         NATS          │                     │
 │                    │   (Event Backbone)    │                     │
 │                    │                       │                     │
 │                    │  ┌─────────────────┐  │                     │
-│                    │  │  crew.events    │  │                     │
-│                    │  │  crew.locations │  │                     │
-│                    │  │  task.events    │  │                     │
-│                    │  │  alert.events   │  │                     │
+│                    │  │ inventario.*    │  │                     │
 │                    │  └─────────────────┘  │                     │
 │                    └───────────────────────┘                     │
 │                                                                  │
@@ -42,46 +34,27 @@ La solución emplea microservicios desacoplados comunicados mediante eventos per
 
 ## Componentes
 
-### Servicios
+### API REST - Mensaje de Inventario de Cuadrilla
 
-- **Crew Tracking Service**: Gestiona la ubicación y estado de las cuadrillas en tiempo real
-- **Task Management Service**: Administra tareas de construcción, mantenimiento e inspección
-- **Alert Management Service**: Procesa alertas de seguridad, equipos y logística desde terreno
+**Endpoint:** `POST /api/v1/mensaje_inventario/cuadrilla`
 
-### API REST - Tracking Tipo Waze
-
-**Endpoint:** `POST /api/v1/tracking`
-
-Recibe mensajes JSON cada 30 segundos desde aplicación móvil de campo.
+Recibe mensajes JSON desde aplicación móvil de campo con inventario y progreso de la cuadrilla.
 
 #### Payload de Solicitud
 
 ```json
 {
-  "crewId": "550e8400-e29b-41d4-a716-446655440000",
+  "grupoTrabajo": "G0/CUADRILLA_123",
+  "nombreEmpleado": "Juan Perez",
   "timestamp": "2024-01-15T10:30:00Z",
-  "gpsCoordinates": {
-    "lat": 40.7128,
-    "lon": -74.0060
+  "coordenadas": {
+    "latitud": 40.7128,
+    "longitud": -74.0060
   },
-  "taskId": "TASK-001",
-  "status": "working",
-  "progressPercentage": 75,
-  "resourceConsumption": {
-    "material_id": "MAT-001",
-    "material_name": "Cable de cobre",
-    "quantity": 150.5,
-    "unit": "metros"
-  },
-  "safetyAlerts": [
-    {
-      "type": "warning",
-      "description": "Condiciones de baja visibilidad",
-      "severity": "medium"
-    }
-  ],
-  "batteryLevel": 85,
-  "region": "north"
+  "codigoODT": "codigoodt_consecutivo",
+  "estado": "trabajando",
+  "procentajeProgreso": 75,
+  "nivelBateria": 85
 }
 ```
 
@@ -96,9 +69,8 @@ Recibe mensajes JSON cada 30 segundos desde aplicación móvil de campo.
 
 ```json
 {
-  "success": true,
-  "message": "Tracking update processed successfully",
-  "request_id": "550e8400-e29b-41d4-a716-446655440000"
+  "status": "success",
+  "message": "Mensaje de inventario de cuadrilla recibido correctamente."
 }
 ```
 
@@ -114,34 +86,30 @@ Recibe mensajes JSON cada 30 segundos desde aplicación móvil de campo.
 
 #### Validaciones
 
-- `crewId`: UUID válido (formato 8-4-4-4-12)
+- `grupoTrabajo`: cadena no vacía
+- `nombreEmpleado`: cadena no vacía
+- `codigoODT`: cadena no vacía
 - `timestamp`: ISO8601 válido
-- `gpsCoordinates.lat`: -90 a 90
-- `gpsCoordinates.lon`: -180 a 180
-- `status`: en_route, working, paused, completed
-- `progressPercentage`: 0-100
-- `batteryLevel`: 0-100
+- `coordenadas.latitud`: -90 a 90
+- `coordenadas.longitud`: -180 a 180
+- `estado`: en_ruta, trabajando, en_pausa, finalizado
+- `procentajeProgreso`: 0-100
+- `nivelBateria`: 0-100
 
 ### Eventos
 
-| Exchange | Routing Keys | Descripción |
-|----------|--------------|-------------|
-| crew.events | crew.location.update, crew.status.update | Eventos de ubicación y estado de cuadrillas |
-| crew.locations | crew.{region}.{crewId} | Eventos de tracking en tiempo real |
-| task.events | task.status.update | Eventos de cambio de estado de tareas |
-| alert.events | alert.created, alert.acknowledged, alert.resolved | Eventos del ciclo de vida de alertas |
+| Subject | Descripción |
+|---------|-------------|
+| inventario.cuadrilla | Evento de inventario de cuadrilla publicado por la API |
 
-### Modelos de Dominio
+### Modelo de Dominio
 
-- **Crew**: Cuadrilla con ID, nombre, líder, ubicación GPS y estado
-- **Task**: Tarea con tipo (construcción/mantenimiento/inspección/emergencia), prioridad y estado
-- **Alert**: Alerta con categoría (seguridad/equipos/clima/logística), severidad y ubicación
-- **TrackingPayload**: Datos de seguimiento desde app móvil
+- **MensajeInventarioCuadrilla**: Datos de inventario y progreso desde la app móvil
 
 ## Requisitos
 
 - Go 1.21+
-- RabbitMQ 3.12+
+- NATS 2.x+
 
 ## Instalación
 
@@ -163,29 +131,29 @@ Variables de entorno:
 
 | Variable | Descripción | Valor por defecto |
 |----------|-------------|-------------------|
-| RABBITMQ_URL | URL de conexión a RabbitMQ | amqp://guest:guest@localhost:5672/ |
+| NATS_URL | URL de conexión a NATS | nats://localhost:4222 |
 | SERVER_PORT | Puerto del servidor | 8080 |
 | HMAC_SECRET | Secreto para validación HMAC-SHA256 | default-secret-change-in-production |
 
 ## Ejecución
 
 ```bash
-# Iniciar RabbitMQ (Docker)
-docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+# Iniciar NATS (Docker)
+docker run -d --name nats -p 4222:4222 nats:2
 
 # Ejecutar la plataforma
 go run ./cmd/server
 ```
 
-## Ejemplo de Uso - API Tracking
+## Ejemplo de Uso - API Mensaje Inventario
 
 ```bash
 # Generar firma HMAC-SHA256
-BODY='{"crewId":"550e8400-e29b-41d4-a716-446655440000","timestamp":"2024-01-15T10:30:00Z","gpsCoordinates":{"lat":40.7128,"lon":-74.006},"taskId":"TASK-001","status":"working","progressPercentage":75,"batteryLevel":85}'
+BODY='{"grupoTrabajo":"G0/CUADRILLA_123","nombreEmpleado":"Juan Perez","timestamp":"2024-01-15T10:30:00Z","coordenadas":{"latitud":40.7128,"longitud":-74.006},"codigoODT":"codigoodt_consecutivo","estado":"trabajando","procentajeProgreso":75,"nivelBateria":85}'
 SIGNATURE=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "your-secret-key" | awk '{print $2}')
 
-# Enviar tracking update
-curl -X POST http://localhost:8080/api/v1/tracking \
+# Enviar mensaje de inventario
+curl -X POST http://localhost:8080/api/v1/mensaje_inventario/cuadrilla \
   -H "Content-Type: application/json" \
   -H "X-Signature-256: $SIGNATURE" \
   -d "$BODY"
@@ -214,26 +182,16 @@ GridFlow-Dynamics/
 ├── internal/
 │   ├── api/
 │   │   ├── handlers/
-│   │   │   └── tracking.go      # Handler del endpoint de tracking
+│   │   │   └── tracking.go      # Handler del endpoint de inventario
 │   │   └── middleware/
 │   │       ├── hmac.go          # Validación HMAC-SHA256
 │   │       └── ratelimit.go     # Rate limiting por cuadrilla
 │   ├── config/
 │   │   └── config.go            # Gestión de configuración
 │   ├── domain/
-│   │   ├── crew.go              # Modelo de cuadrilla
-│   │   ├── task.go              # Modelo de tarea
-│   │   ├── alert.go             # Modelo de alerta
-│   │   └── tracking.go          # Modelo de tracking
-│   ├── messaging/
-│   │   └── rabbitmq.go          # Infraestructura de mensajería
-│   └── services/
-│       ├── crew/
-│       │   └── service.go       # Servicio de tracking de cuadrillas
-│       ├── task/
-│       │   └── service.go       # Servicio de gestión de tareas
-│       └── alert/
-│           └── service.go       # Servicio de gestión de alertas
+│   │   └── tracking.go          # Modelo de inventario de cuadrilla
+│   └── messaging/
+│       └── nats.go              # Infraestructura de mensajería
 ├── go.mod
 ├── go.sum
 └── README.md
@@ -246,7 +204,7 @@ El sistema está diseñado para soportar:
 - **200 cuadrillas simultáneas** reportando en tiempo real
 - **Rate limiting**: 100 solicitudes/minuto por cuadrilla
 - **Seguridad**: Validación HMAC-SHA256 en cada solicitud
-- Eventos persistentes en RabbitMQ para garantizar entrega
+- Eventos publicados en NATS para integración con consumidores externos
 - Arquitectura desacoplada para escalabilidad horizontal
 
 ## Licencia

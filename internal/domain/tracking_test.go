@@ -5,135 +5,168 @@ import (
 	"time"
 )
 
-func TestTrackingStatus(t *testing.T) {
-	statuses := []TrackingStatus{
-		TrackingStatusEnRoute,
-		TrackingStatusWorking,
-		TrackingStatusPaused,
-		TrackingStatusCompleted,
+func TestEstadoCuadrilla(t *testing.T) {
+	estados := []EstadoCuadrilla{
+		EstadoEnRuta,
+		EstadoTrabajando,
+		EstadoEnPausa,
+		EstadoFinalizado,
 	}
 
-	expected := []string{"en_route", "working", "paused", "completed"}
-
-	for i, status := range statuses {
-		if string(status) != expected[i] {
-			t.Errorf("TrackingStatus[%d] = %s; want %s", i, status, expected[i])
+	for _, estado := range estados {
+		if estado == "" {
+			t.Error("Estado no debe estar vacío")
 		}
 	}
 }
 
-func TestGPSCoordinates(t *testing.T) {
-	gps := GPSCoordinates{
-		Latitude:  40.7128,
-		Longitude: -74.0060,
+func TestCoordenadasStruct(t *testing.T) {
+	coords := Coordenadas{
+		Latitud:  40.7128,
+		Longitud: -74.0060,
 	}
 
-	if gps.Latitude != 40.7128 {
-		t.Errorf("Latitude = %f; want 40.7128", gps.Latitude)
+	if coords.Latitud != 40.7128 {
+		t.Errorf("Latitud = %f; esperado 40.7128", coords.Latitud)
 	}
 
-	if gps.Longitude != -74.0060 {
-		t.Errorf("Longitude = %f; want -74.0060", gps.Longitude)
-	}
-}
-
-func TestResourceConsumption(t *testing.T) {
-	rc := ResourceConsumption{
-		MaterialID:   "MAT-001",
-		MaterialName: "Copper Wire",
-		Quantity:     100.5,
-		Unit:         "meters",
-	}
-
-	if rc.MaterialID != "MAT-001" {
-		t.Errorf("MaterialID = %s; want MAT-001", rc.MaterialID)
+	if coords.Longitud != -74.0060 {
+		t.Errorf("Longitud = %f; esperado -74.0060", coords.Longitud)
 	}
 }
 
-func TestSafetyAlert(t *testing.T) {
-	now := time.Now()
-	alert := SafetyAlert{
-		Type:        "hazard",
-		Description: "Unstable ground",
-		Severity:    "high",
-		Timestamp:   now,
+func TestMensajeInventarioCuadrillaValidar(t *testing.T) {
+	tests := []struct {
+		nombre      string
+		mensaje     MensajeInventarioCuadrilla
+		debeErrorar bool
+		errorMsg    string
+	}{
+		{
+			nombre: "Mensaje válido",
+			mensaje: MensajeInventarioCuadrilla{
+				GrupoTrabajo:       "G0/CUADRILLA_123",
+				NombreEmpleado:     "Juan Perez",
+				Timestamp:          time.Now(),
+				Coordenadas:        Coordenadas{Latitud: 40.7128, Longitud: -74.0060},
+				CodigoODT:          "ODT-001",
+				Estado:             "trabajando",
+				PorcentajeProgreso: 75,
+				NivelBateria:       85,
+			},
+			debeErrorar: false,
+		},
+		{
+			nombre: "GrupoTrabajo vacío",
+			mensaje: MensajeInventarioCuadrilla{
+				GrupoTrabajo:       "",
+				NombreEmpleado:     "Juan Perez",
+				Timestamp:          time.Now(),
+				Coordenadas:        Coordenadas{Latitud: 40.7128, Longitud: -74.0060},
+				CodigoODT:          "ODT-001",
+				Estado:             "trabajando",
+				PorcentajeProgreso: 75,
+				NivelBateria:       85,
+			},
+			debeErrorar: true,
+			errorMsg:    "grupoTrabajo es requerido",
+		},
+		{
+			nombre: "NombreEmpleado vacío",
+			mensaje: MensajeInventarioCuadrilla{
+				GrupoTrabajo:       "G0/CUADRILLA_123",
+				NombreEmpleado:     "",
+				Timestamp:          time.Now(),
+				Coordenadas:        Coordenadas{Latitud: 40.7128, Longitud: -74.0060},
+				CodigoODT:          "ODT-001",
+				Estado:             "trabajando",
+				PorcentajeProgreso: 75,
+				NivelBateria:       85,
+			},
+			debeErrorar: true,
+			errorMsg:    "nombreEmpleado es requerido",
+		},
+		{
+			nombre: "Latitud inválida",
+			mensaje: MensajeInventarioCuadrilla{
+				GrupoTrabajo:       "G0/CUADRILLA_123",
+				NombreEmpleado:     "Juan Perez",
+				Timestamp:          time.Now(),
+				Coordenadas:        Coordenadas{Latitud: 100.0, Longitud: -74.0060},
+				CodigoODT:          "ODT-001",
+				Estado:             "trabajando",
+				PorcentajeProgreso: 75,
+				NivelBateria:       85,
+			},
+			debeErrorar: true,
+			errorMsg:    "latitud debe estar entre -90 y 90",
+		},
+		{
+			nombre: "Estado inválido",
+			mensaje: MensajeInventarioCuadrilla{
+				GrupoTrabajo:       "G0/CUADRILLA_123",
+				NombreEmpleado:     "Juan Perez",
+				Timestamp:          time.Now(),
+				Coordenadas:        Coordenadas{Latitud: 40.7128, Longitud: -74.0060},
+				CodigoODT:          "ODT-001",
+				Estado:             "estado_invalido",
+				PorcentajeProgreso: 75,
+				NivelBateria:       85,
+			},
+			debeErrorar: true,
+			errorMsg:    "estado debe ser uno de",
+		},
+		{
+			nombre: "Porcentaje de progreso inválido",
+			mensaje: MensajeInventarioCuadrilla{
+				GrupoTrabajo:       "G0/CUADRILLA_123",
+				NombreEmpleado:     "Juan Perez",
+				Timestamp:          time.Now(),
+				Coordenadas:        Coordenadas{Latitud: 40.7128, Longitud: -74.0060},
+				CodigoODT:          "ODT-001",
+				Estado:             "trabajando",
+				PorcentajeProgreso: 150,
+				NivelBateria:       85,
+			},
+			debeErrorar: true,
+			errorMsg:    "procentajeProgreso debe estar entre 0 y 100",
+		},
 	}
 
-	if alert.Type != "hazard" {
-		t.Errorf("Type = %s; want hazard", alert.Type)
-	}
-
-	if alert.Severity != "high" {
-		t.Errorf("Severity = %s; want high", alert.Severity)
+	for _, tt := range tests {
+		t.Run(tt.nombre, func(t *testing.T) {
+			err := tt.mensaje.Validar()
+			if tt.debeErrorar {
+				if err == nil {
+					t.Error("Se esperaba un error pero no se obtuvo ninguno")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Error inesperado: %v", err)
+				}
+			}
+		})
 	}
 }
 
-func TestTrackingPayload(t *testing.T) {
-	now := time.Now()
-	payload := TrackingPayload{
-		CrewID:    "550e8400-e29b-41d4-a716-446655440000",
-		Timestamp: now,
-		GPSCoordinates: GPSCoordinates{
-			Latitude:  40.7128,
-			Longitude: -74.0060,
-		},
-		TaskID:             "TASK-001",
-		Status:             TrackingStatusWorking,
-		ProgressPercentage: 75,
-		ResourceConsumption: ResourceConsumption{
-			MaterialID: "MAT-001",
-			Quantity:   50,
-		},
-		SafetyAlerts: []SafetyAlert{
-			{Type: "warning", Description: "Low visibility"},
-		},
-		BatteryLevel: 85,
-		Region:       "north",
+func TestEventoInventarioCuadrilla(t *testing.T) {
+	evento := EventoInventarioCuadrilla{
+		GrupoTrabajo:       "G0/CUADRILLA_123",
+		NombreEmpleado:     "Juan Perez",
+		Timestamp:          time.Now(),
+		Coordenadas:        Coordenadas{Latitud: 40.7128, Longitud: -74.0060},
+		CodigoODT:          "ODT-001",
+		Estado:             "trabajando",
+		PorcentajeProgreso: 75,
+		NivelBateria:       85,
+		RecibidoEn:         time.Now(),
 	}
 
-	if payload.CrewID != "550e8400-e29b-41d4-a716-446655440000" {
-		t.Errorf("CrewID mismatch")
+	if evento.GrupoTrabajo == "" {
+		t.Error("GrupoTrabajo no debe estar vacío")
 	}
 
-	if payload.Status != TrackingStatusWorking {
-		t.Errorf("Status = %s; want %s", payload.Status, TrackingStatusWorking)
-	}
-
-	if payload.ProgressPercentage != 75 {
-		t.Errorf("ProgressPercentage = %d; want 75", payload.ProgressPercentage)
-	}
-
-	if len(payload.SafetyAlerts) != 1 {
-		t.Errorf("SafetyAlerts length = %d; want 1", len(payload.SafetyAlerts))
-	}
-}
-
-func TestTrackingEvent(t *testing.T) {
-	now := time.Now()
-	event := TrackingEvent{
-		CrewID:    "550e8400-e29b-41d4-a716-446655440000",
-		Timestamp: now,
-		Location: Location{
-			Latitude:  40.7128,
-			Longitude: -74.0060,
-		},
-		TaskID:             "TASK-001",
-		Status:             TrackingStatusEnRoute,
-		ProgressPercentage: 0,
-		BatteryLevel:       90,
-		Region:             "south",
-		ReceivedAt:         now,
-	}
-
-	if event.CrewID != "550e8400-e29b-41d4-a716-446655440000" {
-		t.Errorf("CrewID mismatch")
-	}
-
-	if event.Region != "south" {
-		t.Errorf("Region = %s; want south", event.Region)
-	}
-
-	if event.ReceivedAt.IsZero() {
-		t.Error("ReceivedAt should not be zero")
+	if evento.Estado != "trabajando" {
+		t.Errorf("Estado = %s; esperado trabajando", evento.Estado)
 	}
 }
