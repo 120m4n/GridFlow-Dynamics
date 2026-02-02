@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"regexp"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -15,165 +14,106 @@ import (
 	"github.com/120m4n/GridFlow-Dynamics/internal/messaging"
 )
 
-// UUIDRegex validates UUID format.
-var UUIDRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-// TrackingHandler handles crew tracking requests.
-type TrackingHandler struct {
+// InventarioHandler maneja las solicitudes de inventario de cuadrilla.
+type InventarioHandler struct {
 	publisher     *messaging.Publisher
 	rateLimiter   *middleware.RateLimiter
 	hmacValidator *middleware.HMACValidator
 }
 
-// NewTrackingHandler creates a new tracking handler.
-func NewTrackingHandler(publisher *messaging.Publisher, rateLimiter *middleware.RateLimiter, hmacValidator *middleware.HMACValidator) *TrackingHandler {
-	return &TrackingHandler{
+// NewInventarioHandler crea un nuevo handler de inventario.
+func NewInventarioHandler(publisher *messaging.Publisher, rateLimiter *middleware.RateLimiter, hmacValidator *middleware.HMACValidator) *InventarioHandler {
+	return &InventarioHandler{
 		publisher:     publisher,
 		rateLimiter:   rateLimiter,
 		hmacValidator: hmacValidator,
 	}
 }
 
-// TrackingResponse represents the API response.
-type TrackingResponse struct {
-	Success   bool   `json:"success"`
-	Message   string `json:"message,omitempty"`
-	Error     string `json:"error,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
+// RespuestaAPI representa la respuesta de la API.
+type RespuestaAPI struct {
+	Status  string `json:"status"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
-// Handle handles POST requests to the tracking endpoint using Fiber.
-func (h *TrackingHandler) Handle(c *fiber.Ctx) error {
-	// Validate HMAC signature
+// Handle maneja las solicitudes POST al endpoint de inventario de cuadrilla usando Fiber.
+func (h *InventarioHandler) Handle(c *fiber.Ctx) error {
+	// Validar firma HMAC
 	body := c.Body()
 	signature := c.Get(middleware.SignatureHeader)
 	if !h.hmacValidator.ValidateSignature(body, signature) {
-		return h.sendError(c, fiber.StatusUnauthorized, "Invalid or missing HMAC signature")
+		return h.sendError(c, fiber.StatusUnauthorized, "Firma HMAC-SHA256 inválida o faltante")
 	}
 
-	// Parse the payload
-	var payload domain.TrackingPayload
-	if err := c.BodyParser(&payload); err != nil {
-		return h.sendError(c, fiber.StatusBadRequest, fmt.Sprintf("Invalid JSON payload: %v", err))
+	// Parsear el payload
+	var mensaje domain.MensajeInventarioCuadrilla
+	if err := c.BodyParser(&mensaje); err != nil {
+		return h.sendError(c, fiber.StatusBadRequest, fmt.Sprintf("Payload JSON inválido: %v", err))
 	}
 
-	// Validate the payload
-	if err := h.validatePayload(&payload); err != nil {
+	// Validar el payload
+	if err := mensaje.Validar(); err != nil {
 		return h.sendError(c, fiber.StatusBadRequest, err.Error())
 	}
 
-	// Check rate limit
-	if !h.rateLimiter.Allow(payload.CrewID) {
-		remaining := h.rateLimiter.Remaining(payload.CrewID)
+	// Verificar límite de tasa
+	if !h.rateLimiter.Allow(mensaje.GrupoTrabajo) {
+		remaining := h.rateLimiter.Remaining(mensaje.GrupoTrabajo)
 		c.Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
-		return h.sendError(c, fiber.StatusTooManyRequests, "Rate limit exceeded (100 requests/minute)")
+		return h.sendError(c, fiber.StatusTooManyRequests, "Rate limit excedido (100 req/min)")
 	}
 
-	// Set rate limit header
-	remaining := h.rateLimiter.Remaining(payload.CrewID)
+	// Configurar headers de límite de tasa
+	remaining := h.rateLimiter.Remaining(mensaje.GrupoTrabajo)
 	c.Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 	c.Set("X-RateLimit-Limit", "100")
 
-	// Convert to tracking event
-	event := h.payloadToEvent(&payload)
+	// Convertir a evento
+	evento := h.mensajeAEvento(&mensaje)
 
-	// Publish to RabbitMQ (if publisher is available)
+	// Publicar a NATS (si el publisher está disponible)
 	if h.publisher != nil {
-		routingKey := fmt.Sprintf("crew.%s.%s", event.Region, payload.CrewID)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if err := h.publisher.Publish(ctx, messaging.ExchangeCrewLocations, routingKey, event); err != nil {
-			log.Printf("Failed to publish tracking event: %v", err)
-			return h.sendError(c, fiber.StatusInternalServerError, "Failed to process tracking update")
+		if err := h.publisher.Publish(ctx, messaging.SubjectInventarioCuadrilla, evento); err != nil {
+			log.Printf("Fallo al publicar evento de inventario: %v", err)
+			return h.sendError(c, fiber.StatusInternalServerError, "Fallo al procesar mensaje de inventario")
 		}
 	}
 
-	log.Printf("Tracking update received from crew %s: status=%s, progress=%d%%, lat=%.6f, lon=%.6f",
-		payload.CrewID, payload.Status, payload.ProgressPercentage,
-		payload.GPSCoordinates.Latitude, payload.GPSCoordinates.Longitude)
+	log.Printf("Mensaje de inventario recibido de cuadrilla %s: empleado=%s, estado=%s, progreso=%d%%, ODT=%s",
+		mensaje.GrupoTrabajo, mensaje.NombreEmpleado, mensaje.Estado, mensaje.PorcentajeProgreso, mensaje.CodigoODT)
 
-	// Send success response
-	return h.sendSuccess(c, "Tracking update processed successfully", payload.CrewID)
+	// Enviar respuesta exitosa
+	return h.sendSuccess(c, "Mensaje de inventario de cuadrilla recibido correctamente.")
 }
 
-func (h *TrackingHandler) validatePayload(p *domain.TrackingPayload) error {
-	// Validate crewId (UUID format)
-	if !UUIDRegex.MatchString(p.CrewID) {
-		return fmt.Errorf("crewId must be a valid UUID")
-	}
-
-	// Validate timestamp
-	if p.Timestamp.IsZero() {
-		return fmt.Errorf("timestamp is required")
-	}
-
-	// Validate GPS coordinates
-	if p.GPSCoordinates.Latitude < -90 || p.GPSCoordinates.Latitude > 90 {
-		return fmt.Errorf("latitude must be between -90 and 90")
-	}
-	if p.GPSCoordinates.Longitude < -180 || p.GPSCoordinates.Longitude > 180 {
-		return fmt.Errorf("longitude must be between -180 and 180")
-	}
-
-	// Validate status
-	switch p.Status {
-	case domain.TrackingStatusEnRoute, domain.TrackingStatusWorking,
-		domain.TrackingStatusPaused, domain.TrackingStatusCompleted:
-		// Valid status
-	default:
-		return fmt.Errorf("status must be one of: en_route, working, paused, completed")
-	}
-
-	// Validate progressPercentage
-	if p.ProgressPercentage < 0 || p.ProgressPercentage > 100 {
-		return fmt.Errorf("progressPercentage must be between 0 and 100")
-	}
-
-	// Validate batteryLevel
-	if p.BatteryLevel < 0 || p.BatteryLevel > 100 {
-		return fmt.Errorf("batteryLevel must be between 0 and 100")
-	}
-
-	// Set default region if not provided
-	if p.Region == "" {
-		p.Region = "default"
-	}
-
-	return nil
-}
-
-func (h *TrackingHandler) payloadToEvent(p *domain.TrackingPayload) *domain.TrackingEvent {
-	return &domain.TrackingEvent{
-		CrewID:    p.CrewID,
-		Timestamp: p.Timestamp,
-		Location: domain.Location{
-			Latitude:  p.GPSCoordinates.Latitude,
-			Longitude: p.GPSCoordinates.Longitude,
-			Accuracy:  0, // Not provided in tracking payload
-		},
-		TaskID:              p.TaskID,
-		Status:              p.Status,
-		ProgressPercentage:  p.ProgressPercentage,
-		ResourceConsumption: p.ResourceConsumption,
-		SafetyAlerts:        p.SafetyAlerts,
-		BatteryLevel:        p.BatteryLevel,
-		Region:              p.Region,
-		ReceivedAt:          time.Now(),
+func (h *InventarioHandler) mensajeAEvento(m *domain.MensajeInventarioCuadrilla) *domain.EventoInventarioCuadrilla {
+	return &domain.EventoInventarioCuadrilla{
+		GrupoTrabajo:       m.GrupoTrabajo,
+		NombreEmpleado:     m.NombreEmpleado,
+		Timestamp:          m.Timestamp,
+		Coordenadas:        m.Coordenadas,
+		CodigoODT:          m.CodigoODT,
+		Estado:             m.Estado,
+		PorcentajeProgreso: m.PorcentajeProgreso,
+		NivelBateria:       m.NivelBateria,
+		RecibidoEn:         time.Now(),
 	}
 }
 
-func (h *TrackingHandler) sendError(c *fiber.Ctx, status int, message string) error {
-	return c.Status(status).JSON(TrackingResponse{
-		Success: false,
-		Error:   message,
+func (h *InventarioHandler) sendError(c *fiber.Ctx, status int, message string) error {
+	return c.Status(status).JSON(RespuestaAPI{
+		Status: "error",
+		Error:  message,
 	})
 }
 
-func (h *TrackingHandler) sendSuccess(c *fiber.Ctx, message string, requestID string) error {
-	return c.Status(fiber.StatusOK).JSON(TrackingResponse{
-		Success:   true,
-		Message:   message,
-		RequestID: requestID,
+func (h *InventarioHandler) sendSuccess(c *fiber.Ctx, message string) error {
+	return c.Status(fiber.StatusOK).JSON(RespuestaAPI{
+		Status:  "success",
+		Message: message,
 	})
 }
