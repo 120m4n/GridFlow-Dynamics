@@ -1,66 +1,100 @@
 package domain
 
 import (
+	"fmt"
 	"time"
 )
 
-// TrackingStatus represents the status of a crew during tracking.
-type TrackingStatus string
+// EstadoCuadrilla representa el estado de una cuadrilla durante el seguimiento.
+type EstadoCuadrilla string
 
 const (
-	TrackingStatusEnRoute    TrackingStatus = "en_route"
-	TrackingStatusWorking    TrackingStatus = "working"
-	TrackingStatusPaused     TrackingStatus = "paused"
-	TrackingStatusCompleted  TrackingStatus = "completed"
+	EstadoEnRuta     EstadoCuadrilla = "en_ruta"
+	EstadoTrabajando EstadoCuadrilla = "trabajando"
+	EstadoEnPausa    EstadoCuadrilla = "en_pausa"
+	EstadoFinalizado EstadoCuadrilla = "finalizado"
 )
 
-// GPSCoordinates represents GPS location data.
-type GPSCoordinates struct {
-	Latitude  float64 `json:"lat"`
-	Longitude float64 `json:"lon"`
+// Coordenadas representa los datos de ubicación GPS.
+type Coordenadas struct {
+	Latitud  float64 `json:"latitud"`
+	Longitud float64 `json:"longitud"`
 }
 
-// ResourceConsumption represents material consumption data.
-type ResourceConsumption struct {
-	MaterialID   string  `json:"material_id,omitempty"`
-	MaterialName string  `json:"material_name,omitempty"`
-	Quantity     float64 `json:"quantity,omitempty"`
-	Unit         string  `json:"unit,omitempty"`
+// MensajeInventarioCuadrilla representa el payload JSON de la app móvil según especificación.
+type MensajeInventarioCuadrilla struct {
+	GrupoTrabajo        string      `json:"grupoTrabajo"`
+	NombreEmpleado      string      `json:"nombreEmpleado"`
+	Timestamp           time.Time   `json:"timestamp"`
+	Coordenadas         Coordenadas `json:"coordenadas"`
+	CodigoODT           string      `json:"codigoODT"`
+	Estado              string      `json:"estado"`
+	PorcentajeProgreso  int         `json:"procentajeProgreso"`
+	NivelBateria        int         `json:"nivelBateria"`
 }
 
-// SafetyAlert represents a safety incident from the field.
-type SafetyAlert struct {
-	Type        string    `json:"type"`
-	Description string    `json:"description"`
-	Severity    string    `json:"severity"`
-	Timestamp   time.Time `json:"timestamp,omitempty"`
+// Validar valida todos los campos del mensaje de inventario de cuadrilla.
+func (m *MensajeInventarioCuadrilla) Validar() error {
+	// Validar grupoTrabajo - cadena no vacía
+	if m.GrupoTrabajo == "" {
+		return fmt.Errorf("grupoTrabajo es requerido y no puede estar vacío")
+	}
+
+	// Validar nombreEmpleado - cadena no vacía
+	if m.NombreEmpleado == "" {
+		return fmt.Errorf("nombreEmpleado es requerido y no puede estar vacío")
+	}
+
+	// Validar codigoODT - cadena no vacía
+	if m.CodigoODT == "" {
+		return fmt.Errorf("codigoODT es requerido y no puede estar vacío")
+	}
+
+	// Validar timestamp - ISO8601 válido
+	if m.Timestamp.IsZero() {
+		return fmt.Errorf("timestamp es requerido y debe ser una fecha válida en formato ISO8601")
+	}
+
+	// Validar coordenadas.latitud: -90 a 90
+	if m.Coordenadas.Latitud < -90 || m.Coordenadas.Latitud > 90 {
+		return fmt.Errorf("coordenadas.latitud debe estar entre -90 y 90, recibido: %.6f", m.Coordenadas.Latitud)
+	}
+
+	// Validar coordenadas.longitud: -180 a 180
+	if m.Coordenadas.Longitud < -180 || m.Coordenadas.Longitud > 180 {
+		return fmt.Errorf("coordenadas.longitud debe estar entre -180 y 180, recibido: %.6f", m.Coordenadas.Longitud)
+	}
+
+	// Validar estado: en_ruta, trabajando, en_pausa, finalizado
+	switch m.Estado {
+	case "en_ruta", "trabajando", "en_pausa", "finalizado":
+		// Estado válido
+	default:
+		return fmt.Errorf("estado debe ser uno de: en_ruta, trabajando, en_pausa, finalizado, recibido: %s", m.Estado)
+	}
+
+	// Validar procentajeProgreso: 0-100
+	if m.PorcentajeProgreso < 0 || m.PorcentajeProgreso > 100 {
+		return fmt.Errorf("procentajeProgreso debe estar entre 0 y 100, recibido: %d", m.PorcentajeProgreso)
+	}
+
+	// Validar nivelBateria: 0-100
+	if m.NivelBateria < 0 || m.NivelBateria > 100 {
+		return fmt.Errorf("nivelBateria debe estar entre 0 y 100, recibido: %d", m.NivelBateria)
+	}
+
+	return nil
 }
 
-// TrackingPayload represents the JSON payload from mobile app.
-type TrackingPayload struct {
-	CrewID              string              `json:"crewId"`
-	Timestamp           time.Time           `json:"timestamp"`
-	GPSCoordinates      GPSCoordinates      `json:"gpsCoordinates"`
-	TaskID              string              `json:"taskId"`
-	Status              TrackingStatus      `json:"status"`
-	ProgressPercentage  int                 `json:"progressPercentage"`
-	ResourceConsumption ResourceConsumption `json:"resourceConsumption"`
-	SafetyAlerts        []SafetyAlert       `json:"safetyAlerts"`
-	BatteryLevel        int                 `json:"batteryLevel"`
-	Region              string              `json:"region,omitempty"`
-}
-
-// TrackingEvent represents the event published to RabbitMQ.
-type TrackingEvent struct {
-	CrewID              string              `json:"crew_id"`
-	Timestamp           time.Time           `json:"timestamp"`
-	Location            Location            `json:"location"`
-	TaskID              string              `json:"task_id"`
-	Status              TrackingStatus      `json:"status"`
-	ProgressPercentage  int                 `json:"progress_percentage"`
-	ResourceConsumption ResourceConsumption `json:"resource_consumption"`
-	SafetyAlerts        []SafetyAlert       `json:"safety_alerts"`
-	BatteryLevel        int                 `json:"battery_level"`
-	Region              string              `json:"region"`
-	ReceivedAt          time.Time           `json:"received_at"`
+// EventoInventarioCuadrilla representa el evento publicado a NATS.
+type EventoInventarioCuadrilla struct {
+	GrupoTrabajo       string      `json:"grupo_trabajo"`
+	NombreEmpleado     string      `json:"nombre_empleado"`
+	Timestamp          time.Time   `json:"timestamp"`
+	Coordenadas        Coordenadas `json:"coordenadas"`
+	CodigoODT          string      `json:"codigo_odt"`
+	Estado             string      `json:"estado"`
+	PorcentajeProgreso int         `json:"porcentaje_progreso"`
+	NivelBateria       int         `json:"nivel_bateria"`
+	RecibidoEn         time.Time   `json:"recibido_en"`
 }
