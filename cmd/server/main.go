@@ -72,6 +72,19 @@ func main() {
 
 	// Create tracking handler
 	trackingHandler := handlers.NewTrackingHandler(publisher, rateLimiter, hmacValidator)
+
+	// Add idempotency middleware if enabled
+	var idempotencyStore *middleware.InMemoryIdempotencyStore
+	if cfg.Idempotency.Enabled {
+		idempotencyStore = middleware.NewInMemoryIdempotencyStore(
+			cfg.Idempotency.TTL,
+			cfg.Idempotency.CleanupInterval,
+		)
+		idempotencyMiddleware := middleware.NewIdempotencyMiddleware(idempotencyStore, cfg.Idempotency.Secret)
+		trackingHandler.WithIdempotency(idempotencyMiddleware)
+		log.Printf("Idempotency enabled with TTL: %v", cfg.Idempotency.TTL)
+	}
+
 	app.Post("/api/v1/tracking", trackingHandler.Handle)
 
 	// Health check endpoint
@@ -99,6 +112,13 @@ func main() {
 	<-sigChan
 
 	log.Println("Shutting down GridFlow-Dynamics Platform...")
+
+	// Close idempotency store if it was created
+	if idempotencyStore != nil {
+		if err := idempotencyStore.Close(); err != nil {
+			log.Printf("Idempotency store close error: %v", err)
+		}
+	}
 
 	// Graceful shutdown of HTTP server
 	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
