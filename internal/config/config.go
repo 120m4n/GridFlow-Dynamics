@@ -35,7 +35,7 @@ func Load() *Config {
 			URL: getEnv("NATS_URL", "nats://localhost:4222"),
 		},
 		Server: ServerConfig{
-			Port: getEnv("SERVER_PORT", "8080"),
+			Port: getEnv("SERVER_PORT", "9080"),
 		},
 		API: APIConfig{
 			HMACSecret:      getEnv("HMAC_SECRET", "default-secret-change-in-production"),
