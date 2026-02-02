@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentación
+README.md
+ARQUITECTURA.md
+arquitectura_diseño.md
+*.md
+
+# Directorios de test
+*_test.go
+
+# Archivos temporales
+*.tmp
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Datos locales
+*.db
+*.sqlite
+
+# IDE
+.vscode
+.idea
+*.iml
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# OS
+.DS_Store
+Thumbs.db

@@ -110,8 +110,12 @@ Recibe mensajes JSON desde aplicación móvil de campo con inventario y progreso
 
 - Go 1.21+
 - NATS 2.x+
+- Docker y Docker Compose (para deployment)
+- PostgreSQL 15+ (para persistencia de datos)
 
 ## Instalación
+
+### Opción 1: Desarrollo Local
 
 ```bash
 # Clonar el repositorio
@@ -123,6 +127,23 @@ go mod download
 
 # Compilar
 go build ./...
+```
+
+### Opción 2: Docker (Recomendado)
+
+```bash
+# Clonar el repositorio
+git clone https://github.com/120m4n/GridFlow-Dynamics.git
+cd GridFlow-Dynamics
+
+# Construir y ejecutar con Docker Compose
+docker-compose up -d
+
+# Ver logs
+docker-compose logs -f gridflow-api
+
+# Detener servicios
+docker-compose down
 ```
 
 ## Configuración
@@ -137,6 +158,8 @@ Variables de entorno:
 
 ## Ejecución
 
+### Desarrollo Local
+
 ```bash
 # Iniciar NATS (Docker)
 docker run -d --name nats -p 4222:4222 nats:2
@@ -144,6 +167,51 @@ docker run -d --name nats -p 4222:4222 nats:2
 # Ejecutar la plataforma
 go run ./cmd/server
 ```
+
+### Producción con Docker
+
+```bash
+# Configurar secreto HMAC (opcional)
+export HMAC_SECRET="your-production-secret-key"
+
+# Iniciar todos los servicios (API, NATS, PostgreSQL)
+docker-compose up -d
+
+# Verificar estado de los servicios
+docker-compose ps
+
+# Ver logs de la API
+docker-compose logs -f gridflow-api
+
+# Verificar health de la API
+curl http://localhost:8080/health
+```
+
+### Build de Imagen Docker
+
+La imagen Docker está optimizada para tamaño mínimo usando multi-stage build:
+
+```bash
+# Construir imagen manualmente
+docker build -t gridflow-dynamics:latest .
+
+# Ver tamaño de la imagen (aproximadamente 15-20MB)
+docker images gridflow-dynamics
+
+# Ejecutar solo la API
+docker run -d \
+  --name gridflow-api \
+  -p 8080:8080 \
+  -e NATS_URL=nats://host.docker.internal:4222 \
+  -e HMAC_SECRET=your-secret \
+  gridflow-dynamics:latest
+```
+
+**Optimizaciones de tamaño de imagen:**
+- Multi-stage build con `golang:1.21-alpine` y `scratch`
+- Binario compilado estáticamente sin CGO
+- Símbolos de debug eliminados (`-ldflags="-w -s"`)
+- Tamaño final: ~15-20MB
 
 ## Ejemplo de Uso - API Mensaje Inventario
 
@@ -192,10 +260,25 @@ GridFlow-Dynamics/
 │   │   └── tracking.go          # Modelo de inventario de cuadrilla
 │   └── messaging/
 │       └── nats.go              # Infraestructura de mensajería
+├── scripts/
+│   └── init.sql                 # Script de inicialización PostgreSQL
+├── Dockerfile                   # Multi-stage build optimizado
+├── docker-compose.yml           # Orquestación de servicios
+├── .dockerignore                # Exclusiones para build Docker
 ├── go.mod
 ├── go.sum
 └── README.md
 ```
+
+## Docker Compose
+
+El archivo `docker-compose.yml` incluye:
+
+- **gridflow-api**: API REST (puerto 8080)
+- **nats**: Message broker (puertos 4222, 8222, 6222)
+- **postgres**: Base de datos (puerto 5432)
+
+Todos los servicios incluyen healthchecks y reinicio automático.
 
 ## Capacidad
 

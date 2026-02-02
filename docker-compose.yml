@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  # NATS Message Broker
+  nats:
+    image: nats:2-alpine
+    container_name: gridflow-nats
+    ports:
+      - "4222:4222"  # Cliente
+      - "8222:8222"  # HTTP Management
+      - "6222:6222"  # Cluster
+    networks:
+      - gridflow-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: gridflow-postgres
+    environment:
+      POSTGRES_DB: gridflow
+      POSTGRES_USER: gridflow_user
+      POSTGRES_PASSWORD: gridflow_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - gridflow-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gridflow_user -d gridflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # GridFlow-Dynamics API
+  gridflow-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gridflow-api
+    environment:
+      - NATS_URL=nats://nats:4222
+      - SERVER_PORT=8080
+      - HMAC_SECRET=${HMAC_SECRET:-default-secret-change-in-production}
+    ports:
+      - "8080:8080"
+    networks:
+      - gridflow-network
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+networks:
+  gridflow-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+    driver: local
