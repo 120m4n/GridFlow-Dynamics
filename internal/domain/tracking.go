@@ -23,14 +23,14 @@ type Coordenadas struct {
 
 // MensajeInventarioCuadrilla representa el payload JSON de la app móvil según especificación.
 type MensajeInventarioCuadrilla struct {
-	GrupoTrabajo        string      `json:"grupoTrabajo"`
-	NombreEmpleado      string      `json:"nombreEmpleado"`
-	Timestamp           time.Time   `json:"timestamp"`
-	Coordenadas         Coordenadas `json:"coordenadas"`
-	CodigoODT           string      `json:"codigoODT"`
-	Estado              string      `json:"estado"`
-	PorcentajeProgreso  int         `json:"procentajeProgreso"`
-	NivelBateria        int         `json:"nivelBateria"`
+	GrupoTrabajo       string      `json:"grupoTrabajo"`
+	NombreEmpleado     string      `json:"nombreEmpleado"`
+	Timestamp          time.Time   `json:"timestamp"`
+	Coordenadas        Coordenadas `json:"coordenadas"`
+	CodigoODT          string      `json:"codigoODT"`
+	Estado             string      `json:"estado"`
+	PorcentajeProgreso int         `json:"procentajeProgreso"`
+	NivelBateria       int         `json:"nivelBateria"`
 }
 
 // Validar valida todos los campos del mensaje de inventario de cuadrilla.

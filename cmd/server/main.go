@@ -2,7 +2,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -16,137 +15,78 @@ import (
 	"github.com/120m4n/GridFlow-Dynamics/internal/api/middleware"
 	"github.com/120m4n/GridFlow-Dynamics/internal/config"
 	"github.com/120m4n/GridFlow-Dynamics/internal/messaging"
-	"github.com/120m4n/GridFlow-Dynamics/internal/services/alert"
-	"github.com/120m4n/GridFlow-Dynamics/internal/services/crew"
-	"github.com/120m4n/GridFlow-Dynamics/internal/services/task"
 )
 
 func main() {
-	log.Println("Starting GridFlow-Dynamics Platform...")
+	log.Println("Iniciando GridFlow-Dynamics Platform...")
 
-	// Load configuration
+	// Cargar configuración
 	cfg := config.Load()
 
-	// Create RabbitMQ connection
-	conn := messaging.NewConnection(cfg.RabbitMQ.URL)
+	// Crear conexión NATS
+	conn := messaging.NewConnection(cfg.NATS.URL)
 	if err := conn.Connect(); err != nil {
-		log.Printf("Warning: Could not connect to RabbitMQ: %v", err)
-		log.Println("The platform will run in standalone mode without messaging")
+		log.Printf("Advertencia: No se pudo conectar a NATS: %v", err)
+		log.Println("La plataforma funcionará en modo standalone sin mensajería")
 	} else {
-		log.Println("Connected to RabbitMQ successfully")
+		log.Println("Conectado a NATS exitosamente")
 		defer conn.Close()
 	}
 
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// Create publisher for API handlers
+	// Crear publisher para handlers de API
 	var publisher *messaging.Publisher
 	if conn.IsConnected() {
 		var err error
 		publisher, err = messaging.NewPublisher(conn)
 		if err != nil {
-			log.Fatalf("Failed to create publisher: %v", err)
+			log.Fatalf("Fallo al crear publisher: %v", err)
 		}
 		defer publisher.Close()
 	}
 
-	// Initialize services if connected to RabbitMQ
-	if conn.IsConnected() {
-		if err := initializeServices(ctx, conn); err != nil {
-			log.Fatalf("Failed to initialize services: %v", err)
-		}
-	}
-
-	// Setup Fiber app
+	// Configurar aplicación Fiber
 	app := fiber.New(fiber.Config{
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	})
 
-	// Create middleware
+	// Crear middleware
 	rateLimiter := middleware.NewRateLimiter(cfg.API.RateLimitPerMin, time.Minute)
 	hmacValidator := middleware.NewHMACValidator(cfg.API.HMACSecret)
 
-	// Create tracking handler
-	trackingHandler := handlers.NewTrackingHandler(publisher, rateLimiter, hmacValidator)
-	app.Post("/api/v1/tracking", trackingHandler.Handle)
+	// Crear handler de inventario
+	inventarioHandler := handlers.NewInventarioHandler(publisher, rateLimiter, hmacValidator)
+	app.Post("/api/v1/mensaje_inventario/cuadrilla", inventarioHandler.Handle)
 
-	// Health check endpoint
+	// Endpoint de salud
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "healthy"})
 	})
 
-	// Start HTTP server in a goroutine
+	// Iniciar servidor HTTP en una goroutine
 	go func() {
 		addr := fmt.Sprintf(":%s", cfg.Server.Port)
-		log.Printf("Starting HTTP server on port %s", cfg.Server.Port)
+		log.Printf("Iniciando servidor HTTP en puerto %s", cfg.Server.Port)
 		if err := app.Listen(addr); err != nil {
-			log.Fatalf("HTTP server failed: %v", err)
+			log.Fatalf("Servidor HTTP falló: %v", err)
 		}
 	}()
 
-	log.Println("GridFlow-Dynamics Platform is running")
-	log.Printf("Configured to support 200 simultaneous crews")
-	log.Printf("Tracking API endpoint: POST /api/v1/tracking")
-	log.Printf("Rate limit: %d requests/minute per crew", cfg.API.RateLimitPerMin)
+	log.Println("GridFlow-Dynamics Platform está corriendo")
+	log.Printf("Configurado para soportar 200 cuadrillas simultáneas")
+	log.Printf("Endpoint de inventario: POST /api/v1/mensaje_inventario/cuadrilla")
+	log.Printf("Rate limit: %d requests/minuto por cuadrilla", cfg.API.RateLimitPerMin)
 
-	// Wait for shutdown signal
+	// Esperar señal de apagado
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	log.Println("Shutting down GridFlow-Dynamics Platform...")
+	log.Println("Apagando GridFlow-Dynamics Platform...")
 
-	// Graceful shutdown of HTTP server
+	// Apagado graceful del servidor HTTP
 	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
-		log.Printf("HTTP server shutdown error: %v", err)
+		log.Printf("Error al apagar servidor HTTP: %v", err)
 	}
-}
-
-func initializeServices(ctx context.Context, conn *messaging.Connection) error {
-	// Create publisher
-	publisher, err := messaging.NewPublisher(conn)
-	if err != nil {
-		return err
-	}
-
-	// Initialize Crew Tracking Service
-	crewConsumer, err := messaging.NewConsumer(conn, "crew-tracking-queue")
-	if err != nil {
-		return err
-	}
-	crewService := crew.NewService(publisher, crewConsumer)
-	if err := crewService.Start(); err != nil {
-		return err
-	}
-	log.Println("Crew Tracking Service started")
-
-	// Initialize Task Management Service
-	taskConsumer, err := messaging.NewConsumer(conn, "task-management-queue")
-	if err != nil {
-		return err
-	}
-	taskService := task.NewService(publisher, taskConsumer)
-	if err := taskService.Start(); err != nil {
-		return err
-	}
-	log.Println("Task Management Service started")
-
-	// Initialize Alert Management Service
-	alertConsumer, err := messaging.NewConsumer(conn, "alert-management-queue")
-	if err != nil {
-		return err
-	}
-	alertService := alert.NewService(publisher, alertConsumer)
-	if err := alertService.Start(); err != nil {
-		return err
-	}
-	log.Println("Alert Management Service started")
-
-	_ = ctx // context available for future use
-
-	return nil
 }
