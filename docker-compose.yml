@@ -67,6 +67,29 @@ services:
       retries: 3
       start_period: 20s
 
+  # Service Worker PostgreSQL
+  service-worker-ps:
+    build:
+      context: .
+      dockerfile: service-worker-ps/Dockerfile
+    container_name: gridflow-service-worker-ps
+    environment:
+      - NATS_URL=nats://nats:4222
+      - NATS_SUBJECT=inventario.cuadrilla
+      - DATABASE_URL=postgres://gridflow_user:gridflow_password@postgres:5432/gridflow?sslmode=disable
+      - REPOSITORY_TYPE=postgresql
+      - WORKER_NUM_WORKERS=${WORKER_NUM_WORKERS:-10}
+      - WORKER_BUFFER_SIZE=${WORKER_BUFFER_SIZE:-100}
+      - WORKER_SHUTDOWN_TIMEOUT=${WORKER_SHUTDOWN_TIMEOUT:-30}
+    networks:
+      - gridflow-network
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 networks:
   gridflow-network:
     driver: bridge
