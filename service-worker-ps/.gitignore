@@ -1,5 +1,5 @@
-# Binaries
-service-worker-ps
+# Binaries (binary in root of service-worker-ps only)
+/service-worker-ps
 *.exe
 *.dll
 *.so
