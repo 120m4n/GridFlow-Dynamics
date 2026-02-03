@@ -8,7 +8,7 @@ GridFlow-Dynamics es una plataforma distribuida para monitorear en tiempo real l
 
 ## Arquitectura
 
-La solución emplea una API REST que publica eventos a NATS:
+La solución emplea una API REST que publica eventos a NATS, con un Service Worker que persiste los datos en PostgreSQL:
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -27,6 +27,16 @@ La solución emplea una API REST que publica eventos a NATS:
 │                    │  ┌─────────────────┐  │                     │
 │                    │  │ inventario.*    │  │                     │
 │                    │  └─────────────────┘  │                     │
+│                    └───────────┬───────────┘                     │
+│                                │                                 │
+│                    ┌───────────▼───────────┐                     │
+│                    │   Service Worker PS   │                     │
+│                    │   (Worker Pool)       │                     │
+│                    └───────────┬───────────┘                     │
+│                                │                                 │
+│                    ┌───────────▼───────────┐                     │
+│                    │      PostgreSQL       │                     │
+│                    │   (Persistencia)      │                     │
 │                    └───────────────────────┘                     │
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
@@ -39,6 +49,23 @@ La solución emplea una API REST que publica eventos a NATS:
 **Endpoint:** `POST /api/v1/mensaje_inventario/cuadrilla`
 
 Recibe mensajes JSON desde aplicación móvil de campo con inventario y progreso de la cuadrilla.
+
+### Service Worker PostgreSQL
+
+**Ubicación:** `service-worker-ps/`
+
+Service worker independiente que escucha eventos de NATS y los persiste en PostgreSQL.
+
+**Características:**
+- ✅ Arquitectura extensible con patrón Repository (PostgreSQL, Oracle, MongoDB)
+- ✅ Worker pool configurable con Go routines
+- ✅ Compilación independiente sin interferir con el código principal
+- ✅ Shutdown graceful y reconexión automática a NATS
+- ✅ Configuración mediante variables de entorno
+
+**Documentación:** Ver [service-worker-ps/README.md](service-worker-ps/README.md)
+
+**Extensibilidad:** Ver [service-worker-ps/EXTENDING.md](service-worker-ps/EXTENDING.md) para agregar soporte a otras bases de datos.
 
 #### Payload de Solicitud
 
@@ -260,6 +287,19 @@ GridFlow-Dynamics/
 │   │   └── tracking.go          # Modelo de inventario de cuadrilla
 │   └── messaging/
 │       └── nats.go              # Infraestructura de mensajería
+├── service-worker-ps/           # Service Worker PostgreSQL (independiente)
+│   ├── cmd/
+│   │   └── service-worker-ps/
+│   │       └── main.go          # Entry point del service worker
+│   ├── internal/
+│   │   ├── config/              # Configuración del service worker
+│   │   ├── repository/          # Patrón Repository (PostgreSQL, Oracle, MongoDB)
+│   │   ├── subscriber/          # NATS subscriber
+│   │   └── worker/              # Worker pool con Go routines
+│   ├── Dockerfile               # Dockerfile del service worker
+│   ├── go.mod                   # Dependencias independientes
+│   ├── README.md                # Documentación del service worker
+│   └── EXTENDING.md             # Guía para agregar otros databases
 ├── scripts/
 │   └── init.sql                 # Script de inicialización PostgreSQL
 ├── Dockerfile                   # Multi-stage build optimizado
@@ -277,8 +317,17 @@ El archivo `docker-compose.yml` incluye:
 - **gridflow-api**: API REST (puerto 8080)
 - **nats**: Message broker (puertos 4222, 8222, 6222)
 - **postgres**: Base de datos (puerto 5432)
+- **service-worker-ps**: Service worker para persistencia en PostgreSQL
 
 Todos los servicios incluyen healthchecks y reinicio automático.
+
+### Variables de Entorno del Service Worker
+
+| Variable | Descripción | Valor por defecto |
+|----------|-------------|-------------------|
+| WORKER_NUM_WORKERS | Número de workers en el pool | 10 |
+| WORKER_BUFFER_SIZE | Tamaño del buffer de mensajes | 100 |
+| WORKER_SHUTDOWN_TIMEOUT | Timeout de shutdown (segundos) | 30 |
 
 ## Capacidad
 
